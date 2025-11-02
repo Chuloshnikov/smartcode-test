@@ -9,21 +9,32 @@ export class MatchService {
   private readonly testsMapDict: Record<string, string>;
 
   constructor() {
-    // преобразователь массива для быстрого доступа по bookingTestId
+    // Преобразуем массив TESTS_MAP в объект для быстрого доступа
     this.testsMapDict = TESTS_MAP.reduce((acc, mapping) => {
       acc[mapping.bookingTestId] = mapping.claimTestId;
       return acc;
     }, {});
   }
 
-
-  //получаем массивы бронирований и заявок и возвращаем список совпадений
+  // Основная функция для матчинга
   async matchBookingsWithClaims(bookings: Booking[], claims: Claim[]): Promise<MatchResult[]> {
     const potentialMatches: PotentialMatch[] = [];
 
-    // Выявляем все портенциальнфе совпадения 
+    // Группируем bookings по patient для быстрого доступа
+    const bookingsByPatient = new Map<string, Booking[]>();
     for (const booking of bookings) {
-      for (const claim of claims) {
+      if (!bookingsByPatient.has(booking.patient)) {
+        bookingsByPatient.set(booking.patient, []);
+      }
+      bookingsByPatient.get(booking.patient)!.push(booking);
+    }
+
+    // Итерируем только по связанным букингам
+    for (const claim of claims) {
+      const relatedBookings = bookingsByPatient.get(claim.patient);
+      if (!relatedBookings) continue;
+
+      for (const booking of relatedBookings) {
         if (this.passesMandatoryCriteria(booking, claim)) {
           const { score, mismatch } = this.calculateMatchScore(booking, claim);
           potentialMatches.push({
@@ -36,26 +47,26 @@ export class MatchService {
       }
     }
 
-    // Сортировка по убыванию в score
+    // Сортируем по убыванию score
     potentialMatches.sort((a, b) => b.score - a.score);
 
-    // Жадный алгоритм для 1:1 матчинга Greed Algo
+    // Применяем жадный алгоритм для выбора 1:1 совпадений
     return this.performGreedyMatching(potentialMatches);
   }
 
+  // Проверка базовых критериев совпадения
   private passesMandatoryCriteria(booking: Booking, claim: Claim): boolean {
-    // Обязательные критерии: patient и дата (без таймфрейма) должны совпадать
     const bookingDate = new Date(booking.reservationDate).toISOString().split('T')[0];
     const claimDate = new Date(claim.bookingDate).toISOString().split('T')[0];
-
     return booking.patient === claim.patient && bookingDate === claimDate;
   }
 
+  // Подсчёт очков совпадения
   private calculateMatchScore(booking: Booking, claim: Claim): { score: number; mismatch: string[] } {
     let score = 0;
     const mismatch: string[] = [];
 
-    // Тест через маппинг
+    // Проверяем тест через мап
     const mappedTest = this.testsMapDict[booking.test];
     if (mappedTest === claim.medicalServiceCode) {
       score += 1;
@@ -63,17 +74,16 @@ export class MatchService {
       mismatch.push('test');
     }
 
-    // Точное время (часы и минуты)
+    // Проверяем время (часы и минуты)
     const bookingTime = this.extractTime(booking.reservationDate);
     const claimTime = this.extractTime(claim.bookingDate);
-    
     if (bookingTime && claimTime && bookingTime === claimTime) {
       score += 1;
     } else {
       mismatch.push('time');
     }
 
-    // Страховая компания
+    // Проверяем страховую компанию
     if (booking.insurance === claim.insurance) {
       score += 1;
     } else {
@@ -83,25 +93,22 @@ export class MatchService {
     return { score, mismatch };
   }
 
+  // Вспомогательная функция для извлечения времени
   private extractTime(dateString: string): string | null {
     try {
       const date = new Date(dateString);
-      // Проверяем, что дата валидна и время не равно 00:00:00 (что может означать отсутствие времени)
-      if (isNaN(date.getTime())) {
-        return null;
-      }
-      
+      if (isNaN(date.getTime())) return null;
+
       const hours = date.getUTCHours().toString().padStart(2, '0');
       const minutes = date.getUTCMinutes().toString().padStart(2, '0');
       const time = `${hours}:${minutes}`;
-      
-      // Если время 00:00, считаем что время не указано
       return time === '00:00' ? null : time;
     } catch {
       return null;
     }
   }
 
+  // Жадный алгоритм выбора наилучших совпадений
   private performGreedyMatching(potentialMatches: PotentialMatch[]): MatchResult[] {
     const results: MatchResult[] = [];
     const matchedBookings = new Set<string>();
@@ -114,7 +121,6 @@ export class MatchService {
           claim: match.claim.id,
         };
 
-        // Добавляем mismatch только если есть несовпадения
         if (match.mismatch.length > 0) {
           result.mismatch = match.mismatch;
         }
@@ -128,5 +134,3 @@ export class MatchService {
     return results;
   }
 }
-
-//Как-то так
